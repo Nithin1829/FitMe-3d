@@ -11,6 +11,7 @@ function App() {
         <Route path="/" element={<Login />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/ar" element={<ARView />} /> {/* Add this route */}
+        {/* Adding the majour content  */}
       </Routes>
     </Router>
   );
