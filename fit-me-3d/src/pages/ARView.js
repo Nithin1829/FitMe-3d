@@ -8,7 +8,9 @@ function ARViewer() {
   const containerRef = useRef(null);
   const videoRef = useRef(null);
   const [loading, setLoading] = useState(true);
+  const [loadingProgress, setLoadingProgress] = useState(0);
   const [error, setError] = useState(null);
+  const [measurements, setMeasurements] = useState(null);
 
   useEffect(() => {
     let camera, scene, renderer;
@@ -16,30 +18,26 @@ function ARViewer() {
     let mediaCamera;
 
     const initThreeJS = () => {
-      // Scene setup
       scene = new THREE.Scene();
 
-      // Camera setup
       camera = new THREE.PerspectiveCamera(
-        75,
+        45,
         window.innerWidth / window.innerHeight,
-        0.1,
-        1000
+        1,
+        2000
       );
-      camera.position.z = 5;
+      camera.position.z = 300;
 
-      // Renderer setup
       renderer = new THREE.WebGLRenderer({ alpha: true });
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.setPixelRatio(window.devicePixelRatio);
       containerRef.current.appendChild(renderer.domElement);
 
-      // Lighting
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
       scene.add(ambientLight);
 
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-      directionalLight.position.set(0, 1, 2);
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+      directionalLight.position.set(0, 200, 100);
       scene.add(directionalLight);
     };
 
@@ -57,20 +55,48 @@ function ARViewer() {
         }
 
         const data = await response.json();
+        setMeasurements(data.measurements);
         const modelPath = `http://localhost:5001${data.gltfFile}`;
 
-        // Load the model
         const loader = new GLTFLoader();
         loader.load(
           modelPath,
           (gltf) => {
             model = gltf.scene;
-            model.scale.set(0.5, 0.5, 0.5);
+            
+            // Get model's original bounding box
+            const bbox = new THREE.Box3().setFromObject(model);
+            const originalDimensions = {
+              height: bbox.max.y - bbox.min.y,
+              width: bbox.max.x - bbox.min.x,
+              depth: bbox.max.z - bbox.min.z
+            };
+
+            // Calculate scale factors based on measurements
+            const scaleFactors = {
+              y: (data.measurements.height) / originalDimensions.height,
+              x: (data.measurements.waist) / originalDimensions.width,
+              z: (data.measurements.chest) / originalDimensions.depth
+            };
+
+            // Apply scaling
+            model.scale.set(scaleFactors.x, scaleFactors.y, scaleFactors.z);
+
+            // Recalculate bounding box after scaling
+            bbox.setFromObject(model);
+            const center = bbox.getCenter(new THREE.Vector3());
+            model.position.sub(center);
+
+            // Center vertically and adjust position
+            model.position.y += data.measurements.height / 2;
+            model.rotation.y = Math.PI; // Face the camera
+
             scene.add(model);
             setLoading(false);
           },
           (xhr) => {
-            console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+            const progress = (xhr.loaded / xhr.total * 100);
+            setLoadingProgress(progress);
           },
           (error) => {
             console.error('Error loading model:', error);
@@ -102,17 +128,16 @@ function ARViewer() {
 
       holistic.onResults((results) => {
         if (results.poseLandmarks && model) {
-          // Update model position based on pose
           const nose = results.poseLandmarks[0];
           if (nose) {
-            model.position.x = (nose.x - 0.5) * 5;
-            model.position.y = (0.5 - nose.y) * 5;
-            model.position.z = -nose.z * 5;
+            // Adjusted position calculations for human-sized model
+            model.position.x = (nose.x - 0.5) * 500;
+            model.position.y = ((0.5 - nose.y) * 500) + measurements?.height / 2;
+            model.position.z = -nose.z * 300;
           }
         }
       });
 
-      // Setup camera
       mediaCamera = new Camera(videoRef.current, {
         onFrame: async () => {
           await holistic.send({
@@ -130,21 +155,19 @@ function ARViewer() {
       renderer.render(scene, camera);
     };
 
-    // Initialize everything
     initThreeJS();
     loadModel();
     setupMediaPipe();
     animate();
 
-    // Handle window resize
     const handleResize = () => {
+      if (!containerRef.current) return;
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
     };
     window.addEventListener('resize', handleResize);
 
-    // Cleanup
     return () => {
       window.removeEventListener('resize', handleResize);
       if (mediaCamera) {
@@ -154,7 +177,7 @@ function ARViewer() {
         containerRef.current.removeChild(renderer.domElement);
       }
     };
-  }, []);
+  }, [measurements]);
 
   return (
     <div className="relative h-screen w-screen">
@@ -177,7 +200,9 @@ function ARViewer() {
       />
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 z-10">
-          <div className="text-white text-xl">Loading AR Experience...</div>
+          <div className="text-white text-xl">
+            Loading AR Experience: {Math.round(loadingProgress)}%
+          </div>
         </div>
       )}
       {error && (
